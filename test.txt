@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Flappy Pig - 60FPS Locked</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            touch-action: none;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+        .pixel-font {
+            font-family: 'Press Start 2P', cursive;
+        }
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+        .animate-float {
+            animation: float 2s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 h-screen w-screen flex justify-center items-center overflow-hidden m-0">
+
+    <div class="relative w-full h-full max-w-[400px] max-h-[700px] sm:rounded-2xl overflow-hidden shadow-2xl bg-sky-300">
+        <canvas id="gameCanvas" width="400" height="700" class="w-full h-full block"></canvas>
+
+        <div id="scoreDisplay" class="absolute top-10 left-0 w-full text-center pointer-events-none hidden">
+            <span id="currentScore" class="text-white text-5xl font-bold pixel-font drop-shadow-[0_4px_4px_rgba(0,0,0,0.5)]" style="-webkit-text-stroke: 2px black;">0</span>
+        </div>
+
+        <!-- Start Screen -->
+        <div id="startScreen" class="absolute inset-0 flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm z-10 transition-opacity duration-300">
+            <div class="text-center">
+                <h1 class="text-white text-4xl sm:text-5xl font-bold pixel-font mb-8 text-shadow-lg drop-shadow-[0_5px_5px_rgba(0,0,0,0.8)]" style="-webkit-text-stroke: 2px black;">FLAPPY<br><span class="text-pink-400">PIG</span></h1>
+                <div class="mb-10 animate-float flex justify-center">
+                    <svg width="60" height="45" viewBox="0 0 60 45" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M15 15 L12 5 L22 10 Z" fill="#f472b6" stroke="black" stroke-width="2" stroke-linejoin="round"/>
+                        <circle cx="28" cy="25" r="16" fill="#f9a8d4" stroke="black" stroke-width="3"/>
+                        <path d="M25 12 L28 2 L35 9 Z" fill="#f9a8d4" stroke="black" stroke-width="2" stroke-linejoin="round"/>
+                        <circle cx="34" cy="18" r="4" fill="white" stroke="black" stroke-width="2"/>
+                        <circle cx="35" cy="18" r="1.5" fill="black"/>
+                        <ellipse cx="42" cy="26" rx="8" ry="6" fill="#f472b6" stroke="black" stroke-width="2"/>
+                        <path d="M12 25 C 5 20, 5 30, 8 28 C 10 26, 8 22, 12 25" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                </div>
+                <button id="startBtn" class="px-8 py-4 bg-green-500 hover:bg-green-400 text-white font-bold rounded-xl text-xl pixel-font border-b-4 border-green-700 active:border-b-0 active:translate-y-1 transition-all">PLAY</button>
+            </div>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div id="gameOverScreen" class="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm z-20 hidden opacity-0 transition-opacity duration-300">
+            <div class="bg-amber-100 p-6 rounded-xl border-4 border-amber-600 text-center shadow-[0_10px_25px_rgba(0,0,0,0.5)] transform scale-95 transition-transform duration-300" id="gameOverModal">
+                <h2 class="text-amber-800 text-3xl font-bold pixel-font mb-4">Game Over</h2>
+                <div class="flex justify-between gap-8 mb-6 bg-amber-200/50 p-4 rounded-lg border-2 border-amber-300">
+                    <div class="flex flex-col">
+                        <span class="text-amber-700 text-sm font-bold uppercase mb-1">Score</span>
+                        <span id="finalScore" class="text-3xl font-bold pixel-font text-white" style="-webkit-text-stroke: 1px black;">0</span>
+                    </div>
+                    <div class="flex flex-col">
+                        <span class="text-amber-700 text-sm font-bold uppercase mb-1">Best</span>
+                        <span id="bestScore" class="text-3xl font-bold pixel-font text-white" style="-webkit-text-stroke: 1px black;">0</span>
+                    </div>
+                </div>
+                <button id="restartBtn" class="w-full py-3 bg-orange-500 hover:bg-orange-400 text-white font-bold rounded-lg text-lg pixel-font border-b-4 border-orange-700 active:border-b-0 active:translate-y-1 transition-all">RESTART</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        let audioCtx;
+        function initAudio() { if (!audioCtx) audioCtx = new AudioContext(); if (audioCtx.state === 'suspended') audioCtx.resume(); }
+        function playSound(type) {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            osc.connect(gainNode); gainNode.connect(audioCtx.destination);
+            const now = audioCtx.currentTime;
+            if (type === 'flap') {
+                osc.type = 'sine'; osc.frequency.setValueAtTime(300, now); osc.frequency.exponentialRampToValueAtTime(500, now + 0.1);
+                gainNode.gain.setValueAtTime(0.3, now); gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+                osc.start(now); osc.stop(now + 0.1);
+            } else if (type === 'score') {
+                osc.type = 'square'; osc.frequency.setValueAtTime(880, now); osc.frequency.setValueAtTime(1200, now + 0.1);
+                gainNode.gain.setValueAtTime(0.2, now); gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+                osc.start(now); osc.stop(now + 0.3);
+            } else if (type === 'hit') {
+                osc.type = 'sawtooth'; osc.frequency.setValueAtTime(100, now); osc.frequency.exponentialRampToValueAtTime(10, now + 0.2);
+                gainNode.gain.setValueAtTime(0.4, now); gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+                osc.start(now); osc.stop(now + 0.2);
+            }
+        }
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const startScreen = document.getElementById('startScreen');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const gameOverModal = document.getElementById('gameOverModal');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const currentScoreEl = document.getElementById('currentScore');
+        const finalScoreEl = document.getElementById('finalScore');
+        const bestScoreEl = document.getElementById('bestScore');
+        const startBtn = document.getElementById('startBtn');
+        const restartBtn = document.getElementById('restartBtn');
+
+        // FIXED CONSTANTS (assuming 60 updates per second)
+        const FPS = 60;
+        const TIMESTEP = 1000 / FPS;
+        const GRAVITY = 0.22;
+        const TERMINAL_VELOCITY = 10;
+        const PIPE_SPEED = 3.0;
+        const PIPE_WIDTH = 60;
+        const PIPE_GAP = 165;
+        const PIPE_SPAWN_INTERVAL = 270;
+        const GROUND_HEIGHT = 112;
+        
+        let gameState = 'start';
+        let frames = 0;
+        let score = 0;
+        let bestScore = localStorage.getItem('flappyBestScore') || 0;
+        let pixelsTraveled = 0;
+        
+        // Time tracking for fixed timestep
+        let lastTime = performance.now();
+        let accumulator = 0;
+
+        let bird = { 
+            x: 80, y: 0, 
+            velocity: 0, radius: 14, rotation: 0,
+            bezierActive: false,
+            bezierTime: 0,
+            bezierDuration: 35,
+            bezierStart: 0,
+            bezierControl: 0,
+            bezierEnd: 0
+        };
+
+        let pipes = [];
+        let groundX = 0;
+        let clouds = [];
+
+        function initClouds() {
+            clouds = [];
+            for(let i=0; i<5; i++) clouds.push({ x: Math.random() * canvas.width, y: Math.random() * (canvas.height / 2), speed: 0.2 + Math.random() * 0.5, scale: 0.5 + Math.random() * 0.8 });
+        }
+
+        function resetGame() {
+            bird = { 
+                x: 80, y: canvas.height / 2 - 50, velocity: 0, radius: 14, rotation: 0,
+                bezierActive: false, bezierTime: 0, bezierDuration: 35,
+                bezierStart: 0, bezierControl: 0, bezierEnd: 0
+            };
+            pipes = [];
+            frames = 0;
+            score = 0;
+            pixelsTraveled = 0;
+            currentScoreEl.innerText = score;
+            initClouds();
+        }
+
+        function getBezierPoint(t, p0, p1, p2) {
+            return (1 - t) * (1 - t) * p0 + 2 * (1 - t) * t * p1 + t * t * p2;
+        }
+
+        function drawBackground() {
+            let gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            gradient.addColorStop(0, '#7dd3fc'); gradient.addColorStop(1, '#e0f2fe');
+            ctx.fillStyle = gradient; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            clouds.forEach(cloud => {
+                ctx.beginPath();
+                ctx.arc(cloud.x, cloud.y, 20 * cloud.scale, 0, Math.PI * 2);
+                ctx.arc(cloud.x + 15 * cloud.scale, cloud.y - 10 * cloud.scale, 25 * cloud.scale, 0, Math.PI * 2);
+                ctx.arc(cloud.x + 30 * cloud.scale, cloud.y, 20 * cloud.scale, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.fillStyle = '#bae6fd'; ctx.fillRect(0, canvas.height - GROUND_HEIGHT - 40, canvas.width, 40);
+        }
+
+        function drawGround() {
+            ctx.fillStyle = '#ded895'; ctx.fillRect(0, canvas.height - GROUND_HEIGHT, canvas.width, GROUND_HEIGHT);
+            ctx.fillStyle = '#73bf2e'; ctx.fillRect(0, canvas.height - GROUND_HEIGHT, canvas.width, 20);
+            ctx.strokeStyle = '#558f22'; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(0, canvas.height - GROUND_HEIGHT); ctx.lineTo(canvas.width, canvas.height - GROUND_HEIGHT); ctx.stroke();
+            ctx.fillStyle = '#c5b573';
+            for (let i = 0; i < canvas.width + 40; i += 40) {
+                let x = i - (groundX % 40);
+                ctx.fillRect(x, canvas.height - GROUND_HEIGHT + 30, 15, 10);
+                ctx.fillRect(x + 20, canvas.height - GROUND_HEIGHT + 60, 20, 15);
+            }
+        }
+
+        function drawBird() {
+            ctx.save();
+            ctx.translate(bird.x, bird.y);
+            ctx.rotate(bird.rotation);
+
+            // Tail
+            ctx.strokeStyle = 'black'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(-bird.radius + 2, 0); ctx.quadraticCurveTo(-bird.radius - 8, -5, -bird.radius - 4, 3);
+            ctx.quadraticCurveTo(-bird.radius - 2, 8, -bird.radius + 2, 4); ctx.stroke();
+
+            // Piggy Features
+            ctx.fillStyle = '#f472b6';
+            ctx.beginPath(); ctx.moveTo(-bird.radius / 2, -bird.radius + 4); ctx.lineTo(-bird.radius / 2 - 6, -bird.radius - 8); ctx.lineTo(2, -bird.radius + 2); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = '#f9a8d4';
+            ctx.beginPath(); ctx.arc(0, 0, bird.radius, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = '#f9a8d4';
+            ctx.beginPath(); ctx.moveTo(0, -bird.radius + 2); ctx.lineTo(4, -bird.radius - 10); ctx.lineTo(10, -bird.radius + 4); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = '#f472b6';
+            ctx.beginPath(); ctx.ellipse(bird.radius, 2, 8, 5, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = 'white';
+            ctx.beginPath(); ctx.arc(bird.radius / 2 - 2, -bird.radius / 2 + 2, bird.radius / 3.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = 'black';
+            ctx.beginPath(); ctx.arc(bird.radius / 2, -bird.radius / 2 + 2, bird.radius / 8, 0, Math.PI * 2); ctx.fill();
+
+            let legOffset = gameState === 'playing' ? Math.sin(frames * 0.5) * 4 : 0;
+            ctx.fillStyle = '#f472b6';
+            ctx.fillRect(2 + legOffset/2, bird.radius - 2, 4, 6 - legOffset); ctx.strokeRect(2 + legOffset/2, bird.radius - 2, 4, 6 - legOffset);
+            ctx.fillRect(-8 - legOffset/2, bird.radius - 2, 4, 6 + legOffset); ctx.strokeRect(-8 - legOffset/2, bird.radius - 2, 4, 6 + legOffset);
+
+            ctx.restore();
+        }
+
+        function drawPipes() {
+            ctx.fillStyle = '#4ade80'; ctx.strokeStyle = '#166534'; ctx.lineWidth = 3;
+            pipes.forEach(pipe => {
+                ctx.fillRect(pipe.x, 0, PIPE_WIDTH, pipe.topHeight); ctx.strokeRect(pipe.x, 0, PIPE_WIDTH, pipe.topHeight);
+                ctx.fillRect(pipe.x - 4, pipe.topHeight - 24, PIPE_WIDTH + 8, 24); ctx.strokeRect(pipe.x - 4, pipe.topHeight - 24, PIPE_WIDTH + 8, 24);
+                const bottomY = pipe.topHeight + PIPE_GAP;
+                const bottomHeight = canvas.height - GROUND_HEIGHT - bottomY;
+                ctx.fillRect(pipe.x, bottomY, PIPE_WIDTH, bottomHeight); ctx.strokeRect(pipe.x, bottomY, PIPE_WIDTH, bottomHeight);
+                ctx.fillRect(pipe.x - 4, bottomY, PIPE_WIDTH + 8, 24); ctx.strokeRect(pipe.x - 4, bottomY, PIPE_WIDTH + 8, 24);
+            });
+        }
+
+        // Logic Update (Fixed to 60Hz)
+        function updatePhysics() {
+            clouds.forEach(cloud => { 
+                cloud.x -= cloud.speed; 
+                if (cloud.x + 50 < 0) { cloud.x = canvas.width + 50; cloud.y = Math.random() * (canvas.height / 2); } 
+            });
+
+            if (gameState !== 'gameover') {
+                groundX += PIPE_SPEED;
+            }
+
+            if (gameState === 'start') {
+                bird.y = (canvas.height / 2 - 50) + Math.sin(frames * 0.05) * 10;
+                frames++;
+                return;
+            }
+
+            if (gameState === 'gameover') {
+                if (bird.y + bird.radius < canvas.height - GROUND_HEIGHT) { 
+                    bird.velocity += GRAVITY * 1.5; 
+                    bird.y += bird.velocity; 
+                    bird.rotation = Math.min(Math.PI/2, bird.rotation + 0.1); 
+                }
+                return;
+            }
+
+            // Vertical Movement
+            if (bird.bezierActive) {
+                bird.bezierTime++;
+                const t = bird.bezierTime / bird.bezierDuration;
+                const prevY = bird.y;
+                bird.y = getBezierPoint(t, bird.bezierStart, bird.bezierControl, bird.bezierEnd);
+                bird.rotation = Math.atan2(bird.y - prevY, 5) * 0.8;
+                if (bird.bezierTime >= bird.bezierDuration) {
+                    bird.bezierActive = false;
+                    bird.velocity = 0;
+                }
+            } else {
+                bird.velocity = Math.min(bird.velocity + GRAVITY, TERMINAL_VELOCITY);
+                bird.y += bird.velocity;
+                bird.rotation = Math.min(Math.PI / 2, Math.max(-Math.PI / 4, (bird.velocity * 0.1)));
+            }
+
+            pixelsTraveled += PIPE_SPEED;
+            
+            if (pixelsTraveled >= PIPE_SPAWN_INTERVAL) {
+                pixelsTraveled = 0;
+                const minH = 70, maxH = canvas.height - GROUND_HEIGHT - PIPE_GAP - 70;
+                pipes.push({ 
+                    x: canvas.width, 
+                    topHeight: Math.floor(Math.random() * (maxH - minH + 1) + minH), 
+                    passed: false 
+                });
+            }
+
+            for (let i = pipes.length - 1; i >= 0; i--) {
+                let p = pipes[i]; 
+                p.x -= PIPE_SPEED;
+                
+                if (p.x + PIPE_WIDTH < 0) { 
+                    pipes.splice(i, 1); 
+                    continue; 
+                }
+
+                if (p.x + PIPE_WIDTH < bird.x - bird.radius && !p.passed) { 
+                    score++; 
+                    p.passed = true; 
+                    currentScoreEl.innerText = score; 
+                    playSound('score'); 
+                }
+
+                const bR = bird.x + bird.radius - 4, bL = bird.x - bird.radius + 4, bT = bird.y - bird.radius + 4, bB = bird.y + bird.radius - 4;
+                if (bR > p.x && bL < p.x + PIPE_WIDTH) {
+                    if (bT < p.topHeight || bB > p.topHeight + PIPE_GAP) triggerGameOver();
+                }
+            }
+
+            if (bird.y + bird.radius >= canvas.height - GROUND_HEIGHT) { bird.y = canvas.height - GROUND_HEIGHT - bird.radius; triggerGameOver(); }
+            if (bird.y - bird.radius <= 0) { bird.y = bird.radius; bird.velocity = 0; bird.bezierActive = false; }
+            frames++;
+        }
+
+        function flap() {
+            if (gameState === 'start') startGame();
+            if (gameState === 'playing') {
+                playSound('flap');
+                bird.bezierActive = true;
+                bird.bezierTime = 0;
+                bird.bezierStart = bird.y;
+                bird.bezierControl = bird.y - 120;
+                bird.bezierEnd = bird.y - 40;
+            }
+        }
+
+        function startGame() { initAudio(); resetGame(); gameState = 'playing'; startScreen.classList.add('opacity-0'); setTimeout(() => { startScreen.classList.add('hidden'); scoreDisplay.classList.remove('hidden'); }, 300); flap(); }
+
+        function triggerGameOver() {
+            if (gameState === 'gameover') return;
+            playSound('hit'); gameState = 'gameover'; bird.bezierActive = false;
+            if (score > bestScore) { bestScore = score; localStorage.setItem('flappyBestScore', bestScore); }
+            finalScoreEl.innerText = score; bestScoreEl.innerText = bestScore;
+            scoreDisplay.classList.add('hidden'); gameOverScreen.classList.remove('hidden');
+            setTimeout(() => { gameOverScreen.classList.remove('opacity-0'); gameOverModal.classList.replace('scale-95', 'scale-100'); }, 50);
+        }
+
+        function showStartScreen() {
+            gameOverScreen.classList.add('opacity-0');
+            setTimeout(() => { gameOverScreen.classList.add('hidden'); gameOverModal.classList.replace('scale-100', 'scale-95'); resetGame(); gameState = 'start'; startScreen.classList.remove('hidden'); setTimeout(() => startScreen.classList.remove('opacity-0'), 50); }, 300);
+        }
+
+        // Main game loop with fixed delta time
+        function gameLoop(currentTime) {
+            // Delta time in ms
+            let deltaTime = currentTime - lastTime;
+            lastTime = currentTime;
+
+            // Cap delta time to avoid spiral of death if tab is backgrounded
+            if (deltaTime > 100) deltaTime = 100;
+
+            accumulator += deltaTime;
+
+            // Run physics updates in chunks of 16.67ms
+            while (accumulator >= TIMESTEP) {
+                updatePhysics();
+                accumulator -= TIMESTEP;
+            }
+
+            // Rendering
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawBackground();
+            drawPipes();
+            drawGround();
+            drawBird();
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+        const handleInput = (e) => {
+            if (e.target.tagName.toLowerCase() === 'button') return;
+            if (e.type === 'keydown' && e.code !== 'Space') return;
+            if (e.cancelable && e.type !== 'mousedown') e.preventDefault(); 
+            if (gameState === 'playing' || gameState === 'start') flap();
+        };
+
+        window.addEventListener('mousedown', handleInput);
+        window.addEventListener('touchstart', handleInput, {passive: false});
+        window.addEventListener('keydown', handleInput);
+        startBtn.addEventListener('click', (e) => { e.stopPropagation(); startGame(); });
+        restartBtn.addEventListener('click', (e) => { e.stopPropagation(); showStartScreen(); });
+
+        resetGame();
+        // Start loop with current time
+        requestAnimationFrame((t) => {
+            lastTime = t;
+            gameLoop(t);
+        });
+    </script>
+</body>
+</html>
