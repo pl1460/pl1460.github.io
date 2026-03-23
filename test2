@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Flappy Pig - 60FPS Locked</title>
+    <title>Flappy Pig - Voice Control</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {
@@ -34,12 +34,18 @@
             <span id="currentScore" class="text-white text-5xl font-bold pixel-font drop-shadow-[0_4px_4px_rgba(0,0,0,0.5)]" style="-webkit-text-stroke: 2px black;">0</span>
         </div>
 
+        <!-- Voice Meter (only visible when voice mode is on) -->
+        <div id="voiceMeterContainer" class="absolute bottom-32 left-1/2 -translate-x-1/2 w-32 h-4 bg-black/30 rounded-full border-2 border-white/50 hidden overflow-hidden">
+            <div id="voiceMeterFill" class="h-full w-0 bg-green-400 transition-all duration-75"></div>
+        </div>
+
         <!-- Start Screen -->
         <div id="startScreen" class="absolute inset-0 flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm z-10 transition-opacity duration-300">
-            <div class="text-center">
-                <h1 class="text-white text-4xl sm:text-5xl font-bold pixel-font mb-8 text-shadow-lg drop-shadow-[0_5px_5px_rgba(0,0,0,0.8)]" style="-webkit-text-stroke: 2px black;">FLAPPY<br><span class="text-pink-400">PIG</span></h1>
-                <div class="mb-10 animate-float flex justify-center">
-                    <svg width="60" height="45" viewBox="0 0 60 45" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <div class="text-center px-4">
+                <h1 class="text-white text-4xl sm:text-5xl font-bold pixel-font mb-6 text-shadow-lg drop-shadow-[0_5px_5px_rgba(0,0,0,0.8)]" style="-webkit-text-stroke: 2px black;">FLAPPY<br><span class="text-pink-400">PIG</span></h1>
+                
+                <div class="mb-6 animate-float flex justify-center">
+                    <svg width="48" height="36" viewBox="0 0 60 45" fill="none" xmlns="http://www.w3.org/2000/svg">
                         <path d="M15 15 L12 5 L22 10 Z" fill="#f472b6" stroke="black" stroke-width="2" stroke-linejoin="round"/>
                         <circle cx="28" cy="25" r="16" fill="#f9a8d4" stroke="black" stroke-width="3"/>
                         <path d="M25 12 L28 2 L35 9 Z" fill="#f9a8d4" stroke="black" stroke-width="2" stroke-linejoin="round"/>
@@ -49,7 +55,15 @@
                         <path d="M12 25 C 5 20, 5 30, 8 28 C 10 26, 8 22, 12 25" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"/>
                     </svg>
                 </div>
-                <button id="startBtn" class="px-8 py-4 bg-green-500 hover:bg-green-400 text-white font-bold rounded-xl text-xl pixel-font border-b-4 border-green-700 active:border-b-0 active:translate-y-1 transition-all">PLAY</button>
+
+                <div class="flex flex-col gap-4 items-center">
+                    <button id="startBtn" class="px-8 py-4 bg-green-500 hover:bg-green-400 text-white font-bold rounded-xl text-xl pixel-font border-b-4 border-green-700 active:border-b-0 active:translate-y-1 transition-all w-full">PLAY</button>
+                    
+                    <button id="voiceToggleBtn" class="px-4 py-3 bg-blue-500 hover:bg-blue-400 text-white font-bold rounded-xl text-xs pixel-font border-b-4 border-blue-700 active:border-b-0 active:translate-y-1 transition-all flex items-center gap-2">
+                        <span id="micIcon">🎤</span> VOICE: <span id="voiceStatusText">OFF</span>
+                    </button>
+                    <p class="text-white/70 text-[10px] pixel-font leading-relaxed max-w-[250px]">Hint: Make a loud "POP" sound to jump!</p>
+                </div>
             </div>
         </div>
 
@@ -75,7 +89,32 @@
     <script>
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         let audioCtx;
-        function initAudio() { if (!audioCtx) audioCtx = new AudioContext(); if (audioCtx.state === 'suspended') audioCtx.resume(); }
+        let micStream;
+        let analyser;
+        let dataArray;
+        let isVoiceEnabled = false;
+        let lastFlapWasVoice = false;
+
+        async function initAudio() { 
+            if (!audioCtx) audioCtx = new AudioContext(); 
+            if (audioCtx.state === 'suspended') audioCtx.resume(); 
+        }
+
+        async function initVoiceControl() {
+            try {
+                micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const source = audioCtx.createMediaStreamSource(micStream);
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 256;
+                source.connect(analyser);
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+                return true;
+            } catch (err) {
+                console.error("Microphone access denied", err);
+                return false;
+            }
+        }
+
         function playSound(type) {
             if (!audioCtx) return;
             const osc = audioCtx.createOscillator();
@@ -108,8 +147,12 @@
         const bestScoreEl = document.getElementById('bestScore');
         const startBtn = document.getElementById('startBtn');
         const restartBtn = document.getElementById('restartBtn');
+        const voiceToggleBtn = document.getElementById('voiceToggleBtn');
+        const voiceStatusText = document.getElementById('voiceStatusText');
+        const voiceMeterContainer = document.getElementById('voiceMeterContainer');
+        const voiceMeterFill = document.getElementById('voiceMeterFill');
 
-        // FIXED CONSTANTS (assuming 60 updates per second)
+        // FIXED CONSTANTS
         const FPS = 60;
         const TIMESTEP = 1000 / FPS;
         const GRAVITY = 0.22;
@@ -119,6 +162,7 @@
         const PIPE_GAP = 165;
         const PIPE_SPAWN_INTERVAL = 270;
         const GROUND_HEIGHT = 112;
+        const VOICE_THRESHOLD = 50; // Sensitivity 0-255
         
         let gameState = 'start';
         let frames = 0;
@@ -126,13 +170,12 @@
         let bestScore = localStorage.getItem('flappyBestScore') || 0;
         let pixelsTraveled = 0;
         
-        // Time tracking for fixed timestep
         let lastTime = performance.now();
         let accumulator = 0;
 
         let bird = { 
             x: 80, y: 0, 
-            velocity: 0, radius: 14, rotation: 0,
+            velocity: 0, radius: 11.2, rotation: 0,
             bezierActive: false,
             bezierTime: 0,
             bezierDuration: 35,
@@ -152,7 +195,7 @@
 
         function resetGame() {
             bird = { 
-                x: 80, y: canvas.height / 2 - 50, velocity: 0, radius: 14, rotation: 0,
+                x: 80, y: canvas.height / 2 - 50, velocity: 0, radius: 11.2, rotation: 0,
                 bezierActive: false, bezierTime: 0, bezierDuration: 35,
                 bezierStart: 0, bezierControl: 0, bezierEnd: 0
             };
@@ -200,31 +243,26 @@
             ctx.save();
             ctx.translate(bird.x, bird.y);
             ctx.rotate(bird.rotation);
-
-            // Tail
+            const r = bird.radius;
             ctx.strokeStyle = 'black'; ctx.lineWidth = 2;
-            ctx.beginPath(); ctx.moveTo(-bird.radius + 2, 0); ctx.quadraticCurveTo(-bird.radius - 8, -5, -bird.radius - 4, 3);
-            ctx.quadraticCurveTo(-bird.radius - 2, 8, -bird.radius + 2, 4); ctx.stroke();
-
-            // Piggy Features
+            ctx.beginPath(); ctx.moveTo(-r + 1.5, 0); ctx.quadraticCurveTo(-r - 6, -4, -r - 3, 2.5);
+            ctx.quadraticCurveTo(-r - 1.5, 6, -r + 1.5, 3); ctx.stroke();
             ctx.fillStyle = '#f472b6';
-            ctx.beginPath(); ctx.moveTo(-bird.radius / 2, -bird.radius + 4); ctx.lineTo(-bird.radius / 2 - 6, -bird.radius - 8); ctx.lineTo(2, -bird.radius + 2); ctx.fill(); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(-r / 2, -r + 3); ctx.lineTo(-r / 2 - 5, -r - 6); ctx.lineTo(2, -r + 1.5); ctx.fill(); ctx.stroke();
             ctx.fillStyle = '#f9a8d4';
-            ctx.beginPath(); ctx.arc(0, 0, bird.radius, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
             ctx.fillStyle = '#f9a8d4';
-            ctx.beginPath(); ctx.moveTo(0, -bird.radius + 2); ctx.lineTo(4, -bird.radius - 10); ctx.lineTo(10, -bird.radius + 4); ctx.fill(); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0, -r + 1.5); ctx.lineTo(3, -r - 8); ctx.lineTo(8, -r + 3); ctx.fill(); ctx.stroke();
             ctx.fillStyle = '#f472b6';
-            ctx.beginPath(); ctx.ellipse(bird.radius, 2, 8, 5, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.beginPath(); ctx.ellipse(r, 1.5, 6.5, 4, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
             ctx.fillStyle = 'white';
-            ctx.beginPath(); ctx.arc(bird.radius / 2 - 2, -bird.radius / 2 + 2, bird.radius / 3.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.beginPath(); ctx.arc(r / 2 - 1.5, -r / 2 + 1.5, r / 3.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
             ctx.fillStyle = 'black';
-            ctx.beginPath(); ctx.arc(bird.radius / 2, -bird.radius / 2 + 2, bird.radius / 8, 0, Math.PI * 2); ctx.fill();
-
-            let legOffset = gameState === 'playing' ? Math.sin(frames * 0.5) * 4 : 0;
+            ctx.beginPath(); ctx.arc(r / 2, -r / 2 + 1.5, r / 8, 0, Math.PI * 2); ctx.fill();
+            let legOffset = gameState === 'playing' ? Math.sin(frames * 0.5) * 3 : 0;
             ctx.fillStyle = '#f472b6';
-            ctx.fillRect(2 + legOffset/2, bird.radius - 2, 4, 6 - legOffset); ctx.strokeRect(2 + legOffset/2, bird.radius - 2, 4, 6 - legOffset);
-            ctx.fillRect(-8 - legOffset/2, bird.radius - 2, 4, 6 + legOffset); ctx.strokeRect(-8 - legOffset/2, bird.radius - 2, 4, 6 + legOffset);
-
+            ctx.fillRect(1.5 + legOffset/2, r - 1.5, 3, 5 - legOffset); ctx.strokeRect(1.5 + legOffset/2, r - 1.5, 3, 5 - legOffset);
+            ctx.fillRect(-6 - legOffset/2, r - 1.5, 3, 5 + legOffset); ctx.strokeRect(-6 - legOffset/2, r - 1.5, 3, 5 + legOffset);
             ctx.restore();
         }
 
@@ -240,16 +278,31 @@
             });
         }
 
-        // Logic Update (Fixed to 60Hz)
         function updatePhysics() {
+            // Voice Analysis
+            if (isVoiceEnabled && analyser && (gameState === 'playing' || gameState === 'start')) {
+                analyser.getByteFrequencyData(dataArray);
+                let sum = 0;
+                for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
+                let average = sum / dataArray.length;
+                
+                // UI Meter Update
+                voiceMeterFill.style.width = Math.min(100, (average / 100) * 100) + '%';
+
+                if (average > VOICE_THRESHOLD && !lastFlapWasVoice) {
+                    flap();
+                    lastFlapWasVoice = true;
+                } else if (average < VOICE_THRESHOLD - 5) {
+                    lastFlapWasVoice = false;
+                }
+            }
+
             clouds.forEach(cloud => { 
                 cloud.x -= cloud.speed; 
                 if (cloud.x + 50 < 0) { cloud.x = canvas.width + 50; cloud.y = Math.random() * (canvas.height / 2); } 
             });
 
-            if (gameState !== 'gameover') {
-                groundX += PIPE_SPEED;
-            }
+            if (gameState !== 'gameover') groundX += PIPE_SPEED;
 
             if (gameState === 'start') {
                 bird.y = (canvas.height / 2 - 50) + Math.sin(frames * 0.05) * 10;
@@ -266,7 +319,6 @@
                 return;
             }
 
-            // Vertical Movement
             if (bird.bezierActive) {
                 bird.bezierTime++;
                 const t = bird.bezierTime / bird.bezierDuration;
@@ -284,37 +336,18 @@
             }
 
             pixelsTraveled += PIPE_SPEED;
-            
             if (pixelsTraveled >= PIPE_SPAWN_INTERVAL) {
                 pixelsTraveled = 0;
                 const minH = 70, maxH = canvas.height - GROUND_HEIGHT - PIPE_GAP - 70;
-                pipes.push({ 
-                    x: canvas.width, 
-                    topHeight: Math.floor(Math.random() * (maxH - minH + 1) + minH), 
-                    passed: false 
-                });
+                pipes.push({ x: canvas.width, topHeight: Math.floor(Math.random() * (maxH - minH + 1) + minH), passed: false });
             }
 
             for (let i = pipes.length - 1; i >= 0; i--) {
-                let p = pipes[i]; 
-                p.x -= PIPE_SPEED;
-                
-                if (p.x + PIPE_WIDTH < 0) { 
-                    pipes.splice(i, 1); 
-                    continue; 
-                }
-
-                if (p.x + PIPE_WIDTH < bird.x - bird.radius && !p.passed) { 
-                    score++; 
-                    p.passed = true; 
-                    currentScoreEl.innerText = score; 
-                    playSound('score'); 
-                }
-
-                const bR = bird.x + bird.radius - 4, bL = bird.x - bird.radius + 4, bT = bird.y - bird.radius + 4, bB = bird.y + bird.radius - 4;
-                if (bR > p.x && bL < p.x + PIPE_WIDTH) {
-                    if (bT < p.topHeight || bB > p.topHeight + PIPE_GAP) triggerGameOver();
-                }
+                let p = pipes[i]; p.x -= PIPE_SPEED;
+                if (p.x + PIPE_WIDTH < 0) { pipes.splice(i, 1); continue; }
+                if (p.x + PIPE_WIDTH < bird.x - bird.radius && !p.passed) { score++; p.passed = true; currentScoreEl.innerText = score; playSound('score'); }
+                const bR = bird.x + bird.radius - 3, bL = bird.x - bird.radius + 3, bT = bird.y - bird.radius + 3, bB = bird.y + bird.radius - 3;
+                if (bR > p.x && bL < p.x + PIPE_WIDTH) { if (bT < p.topHeight || bB > p.topHeight + PIPE_GAP) triggerGameOver(); }
             }
 
             if (bird.y + bird.radius >= canvas.height - GROUND_HEIGHT) { bird.y = canvas.height - GROUND_HEIGHT - bird.radius; triggerGameOver(); }
@@ -334,7 +367,18 @@
             }
         }
 
-        function startGame() { initAudio(); resetGame(); gameState = 'playing'; startScreen.classList.add('opacity-0'); setTimeout(() => { startScreen.classList.add('hidden'); scoreDisplay.classList.remove('hidden'); }, 300); flap(); }
+        function startGame() { 
+            initAudio(); 
+            resetGame(); 
+            gameState = 'playing'; 
+            startScreen.classList.add('opacity-0'); 
+            setTimeout(() => { 
+                startScreen.classList.add('hidden'); 
+                scoreDisplay.classList.remove('hidden'); 
+                if (isVoiceEnabled) voiceMeterContainer.classList.remove('hidden');
+            }, 300); 
+            flap(); 
+        }
 
         function triggerGameOver() {
             if (gameState === 'gameover') return;
@@ -342,43 +386,41 @@
             if (score > bestScore) { bestScore = score; localStorage.setItem('flappyBestScore', bestScore); }
             finalScoreEl.innerText = score; bestScoreEl.innerText = bestScore;
             scoreDisplay.classList.add('hidden'); gameOverScreen.classList.remove('hidden');
+            voiceMeterContainer.classList.add('hidden');
             setTimeout(() => { gameOverScreen.classList.remove('opacity-0'); gameOverModal.classList.replace('scale-95', 'scale-100'); }, 50);
         }
 
         function showStartScreen() {
             gameOverScreen.classList.add('opacity-0');
-            setTimeout(() => { gameOverScreen.classList.add('hidden'); gameOverModal.classList.replace('scale-100', 'scale-95'); resetGame(); gameState = 'start'; startScreen.classList.remove('hidden'); setTimeout(() => startScreen.classList.remove('opacity-0'), 50); }, 300);
+            setTimeout(() => { 
+                gameOverScreen.classList.add('hidden'); 
+                gameOverModal.classList.replace('scale-100', 'scale-95'); 
+                resetGame(); 
+                gameState = 'start'; 
+                startScreen.classList.remove('hidden'); 
+                setTimeout(() => startScreen.classList.remove('opacity-0'), 50); 
+            }, 300);
         }
 
-        // Main game loop with fixed delta time
         function gameLoop(currentTime) {
-            // Delta time in ms
             let deltaTime = currentTime - lastTime;
             lastTime = currentTime;
-
-            // Cap delta time to avoid spiral of death if tab is backgrounded
             if (deltaTime > 100) deltaTime = 100;
-
             accumulator += deltaTime;
-
-            // Run physics updates in chunks of 16.67ms
             while (accumulator >= TIMESTEP) {
                 updatePhysics();
                 accumulator -= TIMESTEP;
             }
-
-            // Rendering
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             drawBackground();
             drawPipes();
             drawGround();
             drawBird();
-            
             requestAnimationFrame(gameLoop);
         }
 
         const handleInput = (e) => {
-            if (e.target.tagName.toLowerCase() === 'button') return;
+            if (e.target.closest('button')) return;
             if (e.type === 'keydown' && e.code !== 'Space') return;
             if (e.cancelable && e.type !== 'mousedown') e.preventDefault(); 
             if (gameState === 'playing' || gameState === 'start') flap();
@@ -387,11 +429,31 @@
         window.addEventListener('mousedown', handleInput);
         window.addEventListener('touchstart', handleInput, {passive: false});
         window.addEventListener('keydown', handleInput);
+        
         startBtn.addEventListener('click', (e) => { e.stopPropagation(); startGame(); });
         restartBtn.addEventListener('click', (e) => { e.stopPropagation(); showStartScreen(); });
 
+        voiceToggleBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await initAudio();
+            if (!isVoiceEnabled) {
+                const success = await initVoiceControl();
+                if (success) {
+                    isVoiceEnabled = true;
+                    voiceStatusText.innerText = "ON";
+                    voiceToggleBtn.classList.replace('bg-blue-500', 'bg-red-500');
+                    voiceToggleBtn.classList.replace('border-blue-700', 'border-red-700');
+                }
+            } else {
+                isVoiceEnabled = false;
+                voiceStatusText.innerText = "OFF";
+                voiceToggleBtn.classList.replace('bg-red-500', 'bg-blue-500');
+                voiceToggleBtn.classList.replace('border-red-700', 'border-blue-700');
+                if (micStream) micStream.getTracks().forEach(t => t.stop());
+            }
+        });
+
         resetGame();
-        // Start loop with current time
         requestAnimationFrame((t) => {
             lastTime = t;
             gameLoop(t);
